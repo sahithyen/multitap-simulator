@@ -1,0 +1,37 @@
+.program sio
+
+    ; Put first byte (0xFF) of command into OSR
+    set x 0
+    mov osr, ! x
+
+    ; Wait for the falling edge of attention
+    wait 1 pin 1
+    wait 0 pin 1
+
+.wrap_target
+bits_loop:
+    ; Shift data-bit out on the falling edge of the clock
+    wait 0 pin 2
+    out pins, 1
+
+    ; Shift command-bit in on the rising edge of the clock
+    wait 1 pin 2
+    in pins, 1
+
+    ; Loop till OSR is full (8 bits)
+    jmp !osre bits_loop
+
+    ; Trigger interrupt to handle new byte
+    irq wait 0
+
+    ; Acknowledge (2 us)
+    set pins, 0
+
+    ; This creates an accurate 2 us delay if the system clock is running at
+    ; 125 MHz
+    set x 9
+delay:
+    jmp x-- delay [25]
+
+    set pins, 1
+.wrap

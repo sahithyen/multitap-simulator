@@ -1,0 +1,1 @@
+void sio_init(void);
