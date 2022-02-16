@@ -1,12 +1,16 @@
 #include <stdio.h>
 
 #include "pico/stdlib.h"
-#include "sio.h"
+#include "dualshock.h"
 
-int main() {
+int main()
+{
     stdio_init_all();
+
+    dualshock_init();
 
     sio_init();
 
-    while (true) ;
+    while (true)
+        ;
 }

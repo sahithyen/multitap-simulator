@@ -8,7 +8,7 @@ project(multitap-simulator)
 
 pico_sdk_init()
 
-add_executable(${PROJECT_NAME} main.c sio.c)
+add_executable(${PROJECT_NAME} main.c sio.c dualshock.c)
 
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/sio.pio)
 
