@@ -1,12 +1,18 @@
-.program sio
+.program sio_packets
+    ; Wait for no attention
+    wait 1 pin 0
+.wrap_target
+    wait 0 pin 0
+    irq wait 0
 
-    ; Put first byte (0xFF) of command into OSR
+    wait 1 pin 0
+    irq wait 2
+.wrap
+
+.program sio_bytes
+    ; Put first byte (0xFF) of data into OSR
     set x 0
     mov osr, ! x
-
-    ; Wait for the falling edge of attention
-    wait 1 pin 1
-    wait 0 pin 1
 
 .wrap_target
 bits_loop:
@@ -22,7 +28,7 @@ bits_loop:
     jmp !osre bits_loop
 
     ; Trigger interrupt to handle new byte
-    irq wait 0
+    irq wait 1
 
     ; Acknowledge (2 us)
     set pins, 0

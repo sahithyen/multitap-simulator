@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
 #include "hardware/irq.h"
@@ -7,36 +9,98 @@
 void pio0_irq0_isr(void);
 
 #define PIO pio0
-#define SM 0
+#define PACKETS_SM 0
+#define BYTES_SM 1
 #define BASE_PIN 2
 
-uint8_t counter = 0;
-uint reset_instruction = 0;
+uint reset_bytes_instruction = 0;
 
-static inline void sio_program_init(uint offset);
+static inline void sio_bytes_init();
+static inline void sio_packets_init();
+
+// Debug variables
+bool dbg_new_packet = false;
+uint8_t dbg_length = 0;
+uint8_t dbg_rx[32];
+uint8_t dbg_tx[32];
 
 void sio_init(void)
 {
     // Setup interrupt
     irq_set_exclusive_handler(PIO0_IRQ_0, pio0_irq0_isr);
     irq_set_enabled(PIO0_IRQ_0, true);
-    pio_set_irq0_source_enabled(PIO, pis_interrupt0, true);
+    pio_set_irq0_source_mask_enabled(
+        PIO,
+        (1 << pis_interrupt0) | (1 << pis_interrupt1) | (1 << pis_interrupt2),
+        true);
 
-    // Load program into instruction memory
-    uint offset = pio_add_program(PIO, &sio_program);
+    // Initialize sio_packets state machine
+    sio_packets_init();
 
-    // Construct reset instruction
-    reset_instruction = offset;
+    // Initialize sio_bytes state machine
+    sio_bytes_init();
 
-    // Initalize state machine
-    sio_program_init(offset);
-
-    // Start state machine
-    pio_sm_set_enabled(PIO, SM, true);
+    // Start packets state machine
+    pio_sm_set_enabled(PIO, PACKETS_SM, true);
 }
 
-static inline void sio_program_init(uint offset)
+void sio_loop(void)
 {
+        if (dbg_new_packet)
+        {
+            printf("RX:");
+            for (size_t i = 0; i < dbg_length; i++)
+            {
+                printf(" %02x", dbg_rx[i]);
+            }
+            printf("\n");
+
+            printf("TX:");
+            for (size_t i = 0; i < dbg_length; i++)
+            {
+                printf(" %02x", dbg_tx[i]);
+            }
+            printf("\n");
+
+            dbg_new_packet = false;
+        }
+}
+
+static inline void sio_packets_init()
+{
+    // Add program into instruction memory
+    uint offset = pio_add_program(PIO, &sio_packets_program);
+
+    // Calculate in base
+    uint in_base = BASE_PIN + 1;
+
+    // Calculate pins
+    uint attention_pin = in_base;
+
+    // Connect pin to PIO
+    pio_gpio_init(PIO, attention_pin);
+
+    // Set pin directions
+    pio_sm_set_consecutive_pindirs(PIO, PACKETS_SM, in_base, 1, false);
+
+    // State machine config
+    pio_sm_config c = sio_packets_program_get_default_config(offset);
+
+    // Set bases
+    sm_config_set_in_pins(&c, in_base);
+
+    // Initialize state machine
+    pio_sm_init(PIO, PACKETS_SM, offset, &c);
+}
+
+static inline void sio_bytes_init()
+{
+    // Add program into instruction memory
+    uint offset = pio_add_program(PIO, &sio_bytes_program);
+
+    // Construct reset instruction
+    reset_bytes_instruction = offset;
+
     // Calculate bases
     uint in_base = BASE_PIN;
     uint out_base = BASE_PIN + 3;
@@ -57,11 +121,11 @@ static inline void sio_program_init(uint offset)
     pio_gpio_init(PIO, acknowledge_pin);
 
     // Set pin directions
-    pio_sm_set_consecutive_pindirs(PIO, SM, in_base, 3, false);
-    pio_sm_set_consecutive_pindirs(PIO, SM, out_base, 2, true);
+    pio_sm_set_consecutive_pindirs(PIO, BYTES_SM, in_base, 3, false);
+    pio_sm_set_consecutive_pindirs(PIO, BYTES_SM, out_base, 2, true);
 
     // State machine config
-    pio_sm_config c = sio_program_get_default_config(offset);
+    pio_sm_config c = sio_bytes_program_get_default_config(offset);
 
     // Set bases
     sm_config_set_in_pins(&c, in_base);
@@ -73,30 +137,66 @@ static inline void sio_program_init(uint offset)
     sm_config_set_out_shift(&c, true, true, 8);
 
     // Initialize state machine
-    pio_sm_init(PIO, SM, offset, &c);
+    pio_sm_init(PIO, BYTES_SM, offset, &c);
 }
 
 static inline void next_attention(void)
 {
-    counter = 0;
-    pio_sm_exec(PIO, SM, reset_instruction);
-    pio_sm_restart(PIO, SM);
+    pio_sm_exec(PIO, BYTES_SM, reset_bytes_instruction);
+    pio_sm_restart(PIO, BYTES_SM);
 }
 
 void pio0_irq0_isr(void)
 {
-    uint8_t command = pio_sm_get(PIO, SM) >> 24;
-
-    struct sio_descision *descision = dualshock_handle_sio(command);
-
-    if (descision->next_packet)
+    if (pio_interrupt_get(PIO, 0))
     {
-        next_attention();
-    }
-    else
-    {
-        pio_sm_put(PIO, SM, descision->data);
-    }
+        // PS2 will end packets prematurely
+        pio_sm_clear_fifos(PIO, BYTES_SM);
 
-    pio_interrupt_clear(PIO, 0);
+        // Cable plugged off in midst of an byte
+        pio_sm_restart(PIO, BYTES_SM);
+
+        // Go to beginning of the program
+        pio_sm_exec_wait_blocking(PIO, BYTES_SM, reset_bytes_instruction);
+
+        pio_sm_set_enabled(PIO, BYTES_SM, true);
+
+        dualshock_sio_packet_started();
+
+        dbg_length = 0;
+        dbg_tx[0] = 0xFF;
+
+        pio_interrupt_clear(PIO, 0);
+    }
+    else if (pio_interrupt_get(PIO, 1))
+    {
+        uint8_t command = pio_sm_get(PIO, BYTES_SM) >> 24;
+
+        dbg_rx[dbg_length] = command;
+        dbg_length++;
+
+        struct sio_descision *descision = dualshock_sio_received_byte(command);
+
+        if (descision->next_packet)
+        {
+            pio_sm_set_enabled(PIO, BYTES_SM, false);
+        }
+        else
+        {
+            pio_sm_put(PIO, BYTES_SM, descision->data);
+            dbg_tx[dbg_length] = descision->data;
+        }
+
+        pio_interrupt_clear(PIO, 1);
+    }
+    else if (pio_interrupt_get(PIO, 2))
+    {
+        dbg_new_packet = true;
+
+        dualshock_sio_packet_ended();
+
+        pio_sm_set_enabled(PIO, BYTES_SM, false);
+
+        pio_interrupt_clear(PIO, 2);
+    }
 }

@@ -10,8 +10,8 @@ struct sio_descision descision = {.next_packet = false, .data = 0};
 bool escape = false;
 bool is_digital = true;
 uint8_t input_state[18] = {
-    0b00000000,
-    0b00000000,
+    0b11111111,
+    0b11111111,
     127,
     127,
     127,
@@ -43,11 +43,15 @@ void dualshock_init(void)
     is_digital = true;
 }
 
-void handle_42(uint8_t command)
+void handle_42h_43h(uint8_t command)
 {
-    escape = false;
-    
-    if (is_digital) {
+    if (byte_counter == 3) {
+        escape = packet_type == 43 && command == 0x01;
+    }
+
+    if (escape && byte_counter >= 8) {
+        descision.next_packet = true;
+    } else if (is_digital) {
         if (byte_counter < 4) {
             descision.data = input_state[byte_counter - 2];
         } else {
@@ -59,7 +63,14 @@ void handle_42(uint8_t command)
     }
 }
 
-struct sio_descision *dualshock_handle_sio(uint8_t command)
+void dualshock_sio_packet_started(void) {
+    byte_counter = 0;
+}
+
+void dualshock_sio_packet_ended(void) {
+}
+
+struct sio_descision *dualshock_sio_received_byte(uint8_t command)
 {
     descision.next_packet = false;
 
@@ -109,8 +120,9 @@ struct sio_descision *dualshock_handle_sio(uint8_t command)
     {
         switch (packet_type)
         {
+        case 0x43:
         case 0x42:
-            handle_42(command);
+            handle_42h_43h(command);
             break;
         
         default:
@@ -120,14 +132,7 @@ struct sio_descision *dualshock_handle_sio(uint8_t command)
         }
     }
 
-    if (descision.next_packet)
-    {
-        byte_counter = 0;
-    }
-    else
-    {
-        byte_counter++;
-    }
+    byte_counter++;
 
     return &descision;
 }

@@ -7,3 +7,4 @@ struct sio_descision
 };
 
 void sio_init(void);
+void sio_loop(void);

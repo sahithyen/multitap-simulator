@@ -11,6 +11,7 @@ int main()
 
     sio_init();
 
-    while (true)
-        ;
+    while (true) {
+        sio_loop();
+    }
 }
