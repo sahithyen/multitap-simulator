@@ -1,3 +1,5 @@
+#pragma once
+
 #include "pico/stdlib.h"
 
 struct sio_descision
